@@ -13,7 +13,7 @@ conn=psycopg2.connect(
     host="localhost",
     port="5432"
 )
-tables= ['students','instructors','departments','courses','corecourses','enrollments']
+tables=['students','instructors','departments','courses','corecourses','enrollments']
 df={}
 for i in tables:
     query=f"select * from {i};"
