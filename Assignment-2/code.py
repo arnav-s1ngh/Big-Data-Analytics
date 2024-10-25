@@ -1,109 +1,84 @@
 import pandas as pd
 import json
-import numpy as np
-import logging
+from datasketch import MinHash,MinHashLSH
+import matplotlib.pyplot as plt
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
-from datasketch import MinHash, MinHashLSH
-import matplotlib.pyplot as plt
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+with open("ids.txt","r") as f:
+    ids=[line.strip() for line in f]
+with open("texts.txt","r",encoding="utf-8") as f:
+    texts=[line.strip() for line in f]
+with open("items.json","r") as f:
+    ground_truth=json.load(f)
 
-logging.info("Loading data...")
-# Load data
-with open("ids.txt", "r") as f:
-    ids = [line.strip() for line in f]
-with open("texts.txt", "r", encoding="utf-8") as f:
-    texts = [line.strip() for line in f]
-with open("items.json", "r") as f:
-    ground_truth = json.load(f)
-logging.info("Data loaded successfully.")
+vectorizer=TfidfVectorizer(max_features=5000)
+tfidf_matrix=vectorizer.fit_transform(texts)
+#to ensure that the matrix is not sparse
+svd=TruncatedSVD(n_components=500)
+reduced_matrix=svd.fit_transform(tfidf_matrix)
+lsh=MinHashLSH(threshold=0.4,num_perm=256)
+minhashes={}
 
-# Vectorize text data
-logging.info("Vectorizing text data with TF-IDF...")
-vectorizer = TfidfVectorizer(max_features=3000)  # Increased feature space
-tfidf_matrix = vectorizer.fit_transform(texts)
-logging.info("TF-IDF vectorization complete.")
-
-# Dimensionality reduction
-logging.info("Reducing dimensions with TruncatedSVD...")
-svd = TruncatedSVD(n_components=500)  # Increased components for better capture
-reduced_matrix = svd.fit_transform(tfidf_matrix)
-logging.info("Dimensionality reduction complete.")
-
-# Initialize LSH
-logging.info("Setting up LSH with Jaccard similarity...")
-lsh = MinHashLSH(threshold=0.3, num_perm=256)  # Lowered threshold, increased permutations
-minhashes = {}
-
-logging.info("Creating MinHash signatures and inserting into LSH...")
-for idx, vec in enumerate(reduced_matrix):
-    m = MinHash(num_perm=256)
+for id_curr,vec in enumerate(reduced_matrix):
+    mhash=MinHash(num_perm=256)
     for val in vec:
-        m.update(str(val).encode('utf8'))
-    minhashes[ids[idx]] = m
-    lsh.insert(ids[idx], m)
-    if idx % 1000 == 0:
-        logging.info(f"Processed {idx}/{len(ids)} items for MinHash insertion.")
+        mhash.update(str(val).encode('utf8'))
+    minhashes[ids[id_curr]]=mhash
+    lsh.insert(ids[id_curr],mhash)
 
-logging.info("MinHash signatures created and inserted into LSH.")
-
-# Retrieve top 5 similar items
-logging.info("Retrieving top 5 similar items for each data sample using Jaccard similarity...")
-predictions = {}
-for idx, id_ in enumerate(ids):
-    m = minhashes[id_]
-    candidates = lsh.query(m)
-
-    # Calculate Jaccard similarity on candidates and select top 5
-    if candidates:
-        candidate_similarities = []
+predictions={}
+for id_curr,id_actual in enumerate(ids):
+    mhash=minhashes[id_actual]
+    candidates=lsh.query(mhash)
+    if candidates is not None and len(candidates)>0:
+        candidate_similarities=[]
         for candidate_id in candidates:
-            if candidate_id != id_:
-                candidate_m = minhashes[candidate_id]
-                jaccard_similarity = m.jaccard(candidate_m)
-                candidate_similarities.append((candidate_id, jaccard_similarity))
-
-        # Sort by Jaccard similarity and take top 5
-        top5 = sorted(candidate_similarities, key=lambda x: x[1], reverse=True)[:5]
-        predictions[id_] = [candidate_id for candidate_id, _ in top5]
+            if candidate_id!=id_actual:
+                candidate_m=minhashes[candidate_id]
+                jaccard_similarity=mhash.jaccard(candidate_m)
+                candidate_similarities.append((candidate_id,jaccard_similarity))
+        toplist=sorted(candidate_similarities,key=lambda x:x[1])
+        toplist.reverse()
+        toplist=toplist[:5]
+        predictions[id_actual]=[candidate_id for candidate_id,_ in toplist]
     else:
-        predictions[id_] = []
-
-    if idx % 1000 == 0:
-        logging.info(f"Processed {idx}/{len(ids)} samples for similarity retrieval.")
-
-logging.info("Similarity retrieval complete for all samples.")
-
-# Evaluation
-logging.info("Evaluating model performance...")
-scores = []
-for id_, predicted_ids in predictions.items():
-    true_ids = set(ground_truth.get(id_, []))
-    predicted_ids = set(predicted_ids)
-    score = len(true_ids.intersection(predicted_ids))
+        predictions[id_actual]=[]
+scores=[]
+for id_actual,predicted_ids in predictions.items():
+    true_ids=set(ground_truth.get(id_actual,[]))
+    predicted_ids=set(predicted_ids)
+    score=len(true_ids.intersection(predicted_ids))
     scores.append(score)
-
-# Convert scores to pandas series for easy analysis
-score_series = pd.Series(scores)
-logging.info("Model evaluation complete.")
-logging.info(f"Score Statistics:\n{score_series.describe()}")
-
-# Plot Histogram
-logging.info("Plotting histogram of intersection scores...")
-plt.hist(scores, bins=5, range=(0, 5))
-plt.xlabel("Intersection Score")
-plt.ylabel("Frequency")
-plt.title("Distribution of Intersection Scores")
+score_series=pd.Series(scores)
+print(score_series.describe())
+plt.hist(scores,bins=5,range=(0,5))
 plt.show()
-
-# Plot Box Plot
-logging.info("Plotting box plot of intersection scores...")
 plt.boxplot(scores)
-plt.title("Box Plot of Intersection Scores")
 plt.show()
 
-logging.info("Script execution complete.")
-
-
+# with open("test_ids.txt","r") as f:
+#     test_ids=[line.strip() for line in f]
+# with open("test_texts.txt","r",encoding="utf-8") as f:
+#     test_texts=[line.strip() for line in f]
+# test_tfidf_matrix=vectorizer.transform(test_texts)
+# test_reduced_matrix=svd.transform(test_tfidf_matrix)
+# test_predictions={}
+# for id_curr,test_id in enumerate(test_ids):
+#     mhash=MinHash(num_perm=256)
+#     for val in test_reduced_matrix[id_curr]:
+#         mhash.update(str(val).encode('utf8'))
+#     candidates=lsh.query(mhash)
+#     candidate_similarities=[]
+#     if candidates:
+#         for candidate_id in candidates:
+#             candidate_m=minhashes[candidate_id]
+#             jaccard_similarity=mhash.jaccard(candidate_m)
+#             candidate_similarities.append((candidate_id,jaccard_similarity))
+#         toplist=sorted(candidate_similarities,key=lambda x:x[1])
+#         toplist.reverse()
+#         toplist=toplist[:5]
+#         test_predictions[test_id]=[candidate_id for candidate_id,_ in toplist]
+#     else:
+#         test_predictions[test_id]=[]
+#print(test_predictions)
