@@ -1,106 +1,109 @@
+import pandas as pd
 import json
 import numpy as np
-import pandas as pd
 import logging
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
-from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics.pairwise import cosine_similarity
+from datasketch import MinHash, MinHashLSH
 import matplotlib.pyplot as plt
 
-# Initialize logging
+# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+logging.info("Loading data...")
 # Load data
-logging.info("Loading data files...")
-
-with open('ids.txt', 'r') as f:
-    ids = [line.strip() for line in f.readlines()]
-
-with open('texts.txt', 'r', encoding='utf-8') as f:
-    texts = [line.strip() for line in f.readlines()]
-
-with open('items.json', 'r') as f:
+with open("ids.txt", "r") as f:
+    ids = [line.strip() for line in f]
+with open("texts.txt", "r", encoding="utf-8") as f:
+    texts = [line.strip() for line in f]
+with open("items.json", "r") as f:
     ground_truth = json.load(f)
+logging.info("Data loaded successfully.")
 
-# Feature Extraction
-logging.info("Extracting features using TF-IDF...")
-vectorizer = TfidfVectorizer(max_features=5000, stop_words='english', ngram_range=(1, 2))
+# Vectorize text data
+logging.info("Vectorizing text data with TF-IDF...")
+vectorizer = TfidfVectorizer(max_features=3000)  # Increased feature space
 tfidf_matrix = vectorizer.fit_transform(texts)
+logging.info("TF-IDF vectorization complete.")
 
-# Dimensionality Reduction
-logging.info("Reducing dimensionality with Truncated SVD...")
-svd = TruncatedSVD(n_components=300, random_state=42)
-tfidf_reduced = svd.fit_transform(tfidf_matrix)
+# Dimensionality reduction
+logging.info("Reducing dimensions with TruncatedSVD...")
+svd = TruncatedSVD(n_components=500)  # Increased components for better capture
+reduced_matrix = svd.fit_transform(tfidf_matrix)
+logging.info("Dimensionality reduction complete.")
 
-# Nearest Neighbors Model
-logging.info("Using Nearest Neighbors with Cosine distance...")
-nbrs = NearestNeighbors(n_neighbors=6, metric='cosine', algorithm='brute').fit(tfidf_reduced)
-distances, indices = nbrs.kneighbors(tfidf_reduced)
+# Initialize LSH
+logging.info("Setting up LSH with Jaccard similarity...")
+lsh = MinHashLSH(threshold=0.3, num_perm=256)  # Lowered threshold, increased permutations
+minhashes = {}
 
-# Generate predictions
-logging.info("Generating predictions...")
+logging.info("Creating MinHash signatures and inserting into LSH...")
+for idx, vec in enumerate(reduced_matrix):
+    m = MinHash(num_perm=256)
+    for val in vec:
+        m.update(str(val).encode('utf8'))
+    minhashes[ids[idx]] = m
+    lsh.insert(ids[idx], m)
+    if idx % 1000 == 0:
+        logging.info(f"Processed {idx}/{len(ids)} items for MinHash insertion.")
+
+logging.info("MinHash signatures created and inserted into LSH.")
+
+# Retrieve top 5 similar items
+logging.info("Retrieving top 5 similar items for each data sample using Jaccard similarity...")
 predictions = {}
-for idx, neighbors in enumerate(indices):
-    predictions[ids[idx]] = [ids[neighbor_idx] for neighbor_idx in neighbors[1:6]]
+for idx, id_ in enumerate(ids):
+    m = minhashes[id_]
+    candidates = lsh.query(m)
 
-# Evaluate performance
-logging.info("Evaluating performance...")
-intersection_scores = []
-for sample_id, true_neighbors in ground_truth.items():
-    predicted_neighbors = predictions.get(sample_id, [])
-    intersection = len(set(true_neighbors) & set(predicted_neighbors))
-    intersection_scores.append(intersection)
+    # Calculate Jaccard similarity on candidates and select top 5
+    if candidates:
+        candidate_similarities = []
+        for candidate_id in candidates:
+            if candidate_id != id_:
+                candidate_m = minhashes[candidate_id]
+                jaccard_similarity = m.jaccard(candidate_m)
+                candidate_similarities.append((candidate_id, jaccard_similarity))
 
-# Statistics and visualization
-logging.info("Calculating and displaying statistics...")
-intersection_scores_series = pd.Series(intersection_scores)
-print(intersection_scores_series.describe())
+        # Sort by Jaccard similarity and take top 5
+        top5 = sorted(candidate_similarities, key=lambda x: x[1], reverse=True)[:5]
+        predictions[id_] = [candidate_id for candidate_id, _ in top5]
+    else:
+        predictions[id_] = []
 
-# Histogram and Boxplot
-plt.figure(figsize=(14, 6))
+    if idx % 1000 == 0:
+        logging.info(f"Processed {idx}/{len(ids)} samples for similarity retrieval.")
 
-# Histogram
-plt.subplot(1, 2, 1)
-plt.hist(intersection_scores, bins=6, edgecolor='black')
-plt.title('Histogram of Intersection Scores')
-plt.xlabel('Intersection Score')
-plt.ylabel('Frequency')
+logging.info("Similarity retrieval complete for all samples.")
 
-# Box plot
-plt.subplot(1, 2, 2)
-plt.boxplot(intersection_scores)
-plt.title('Boxplot of Intersection Scores')
-plt.ylabel('Intersection Score')
+# Evaluation
+logging.info("Evaluating model performance...")
+scores = []
+for id_, predicted_ids in predictions.items():
+    true_ids = set(ground_truth.get(id_, []))
+    predicted_ids = set(predicted_ids)
+    score = len(true_ids.intersection(predicted_ids))
+    scores.append(score)
 
-plt.tight_layout()
+# Convert scores to pandas series for easy analysis
+score_series = pd.Series(scores)
+logging.info("Model evaluation complete.")
+logging.info(f"Score Statistics:\n{score_series.describe()}")
+
+# Plot Histogram
+logging.info("Plotting histogram of intersection scores...")
+plt.hist(scores, bins=5, range=(0, 5))
+plt.xlabel("Intersection Score")
+plt.ylabel("Frequency")
+plt.title("Distribution of Intersection Scores")
 plt.show()
 
-# Predict function for test data
-def predict_top_5_for_test(test_ids_file, test_texts_file, output_file):
-    logging.info("Loading test data and generating predictions...")
-    with open(test_ids_file, 'r') as f:
-        test_ids = [line.strip() for line in f.readlines()]
+# Plot Box Plot
+logging.info("Plotting box plot of intersection scores...")
+plt.boxplot(scores)
+plt.title("Box Plot of Intersection Scores")
+plt.show()
 
-    with open(test_texts_file, 'r', encoding='utf-8') as f:
-        test_texts = [line.strip() for line in f.readlines()]
+logging.info("Script execution complete.")
 
-    # Transform test data
-    test_tfidf = vectorizer.transform(test_texts)
-    test_reduced = svd.transform(test_tfidf)
-
-    # Neighbors for test data
-    test_distances, test_indices = nbrs.kneighbors(test_reduced)
-
-    # Generate top 5 similar items (excluding self)
-    test_predictions = {}
-    for idx, neighbors in enumerate(test_indices):
-        test_predictions[test_ids[idx]] = [ids[neighbor_idx] for neighbor_idx in neighbors[1:6]]
-
-    # Save predictions
-    with open(output_file, 'w') as f:
-        json.dump(test_predictions, f)
-
-# Example of using the test function
-# predict_top_5_for_test('test_ids.txt', 'test_texts.txt', 'test_predictions.json')
 
