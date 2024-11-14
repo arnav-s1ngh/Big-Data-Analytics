@@ -7,7 +7,7 @@ CALL apoc.periodic.iterate(
 
   FOREACH (refId IN row.reference |
       MERGE (ref:Paper {id: refId})  // Create or match referenced paper node
-      MERGE (p)-[:CITES]->(ref)      // Create citation relationship
+      MERGE (p)-[:cite]->(ref)      // Create citation relationship
   )",
   {batchSize: 1, parallel: true}  // Batch size and parallel execution
 )
