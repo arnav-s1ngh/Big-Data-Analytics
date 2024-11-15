@@ -1,15 +1,14 @@
 CREATE INDEX FOR (p:Paper) ON (p.id);
 CALL apoc.periodic.iterate(
-  "CALL apoc.load.json('file:///train.json') YIELD value RETURN value",  // Load JSON in batches
+  "CALL apoc.load.json('file:///train.json') YIELD value RETURN value",
   "
   UNWIND value AS row
-  MERGE (p:Paper {id: row.paper})  // Create or match citing paper node
-
+  MERGE (p:Paper {id: row.paper})  
   FOREACH (refId IN row.reference |
-      MERGE (ref:Paper {id: refId})  // Create or match referenced paper node
-      MERGE (p)-[:cite]->(ref)      // Create citation relationship
+      MERGE (ref:Paper {id: refId})
+      MERGE (p)-[:cite]->(ref)    
   )",
-  {batchSize: 1, parallel: true}  // Batch size and parallel execution
+  {batchSize: 1, parallel: true}  
 )
 YIELD batches, total
 RETURN batches, total;
