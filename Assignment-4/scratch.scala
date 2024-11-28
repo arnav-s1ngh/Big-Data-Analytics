@@ -3,7 +3,7 @@ import org.apache.spark.graphx._
 import org.apache.spark.rdd.RDD
 import scala.util.Random
 
-object BigCLAMCommunityDetection {
+object AGMCommunityDetection {
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().appName("BigCLAM Community Detection").master("local[*]").getOrCreate()
@@ -11,7 +11,7 @@ object BigCLAMCommunityDetection {
 
     // Load Nodes
     val nodes = "/Users/arnavsingh/Downloads/git_web_ml/musae_git_target.csv"
-    val numCommunities = 5 // Number of communities
+    val numCommunities = 6 // Number of communities
     val nodesRDD: RDD[(VertexId, Array[Double])] = spark.read
       .option("header", "true")
       .csv(nodes)
@@ -65,5 +65,40 @@ object BigCLAMCommunityDetection {
 
     println("Detected Communities:")
     communities.collect().foreach(println)
+
+    // Compute modularity
+    val modularity = computeModularity(graph, communities)
+    println(s"Modularity: $modularity")
   }
+
+  def computeModularity(graph: Graph[Array[Double], Int], communities: VertexRDD[Int]): Double = {
+    val m = graph.edges.count() // Total number of edges
+
+    // Collect degrees and communities to the driver and broadcast them
+    val degreesMap = graph.degrees.mapValues(_.toDouble).collectAsMap()
+    val broadcastDegrees = graph.vertices.sparkContext.broadcast(degreesMap)
+
+    val communitiesMap = communities.collectAsMap()
+    val broadcastCommunities = graph.vertices.sparkContext.broadcast(communitiesMap)
+
+    val modularity = graph.triplets.map { triplet =>
+      val srcCommunity = broadcastCommunities.value.getOrElse(triplet.srcId, -1)
+      val dstCommunity = broadcastCommunities.value.getOrElse(triplet.dstId, -1)
+
+      val Aij = 1.0 // Edge exists
+      val expected = broadcastDegrees.value.getOrElse(triplet.srcId, 0.0) *
+        broadcastDegrees.value.getOrElse(triplet.dstId, 0.0) / (2.0 * m)
+
+      if (srcCommunity == dstCommunity) Aij - expected else 0.0
+    }.sum() / (2.0 * m)
+
+    // Unpersist broadcast variables to free memory
+    broadcastDegrees.unpersist()
+    broadcastCommunities.unpersist()
+
+    modularity
+  }
+
+
 }
+
