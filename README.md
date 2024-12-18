@@ -6,4 +6,4 @@ Assignment-2: Implementing LSH to retrieve top 5 samples from the given dataset
 
 Assignment-3: Creating a Citation Graph in Neo4J and implementing Simrank using Spark
 
-Assignment-4: Building a Community Detection Algorithm using GraphX
+Assignment-4: Building a Community Detection Algorithm based on AGMfit using GraphX
